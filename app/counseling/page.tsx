@@ -30,10 +30,12 @@ export default async function CounselingPage() {
     redirect("/login");
   }
 
+  const normalizedUserEmail = user.email.trim().toLowerCase();
+
   const { data: canAccess } = await supabase.rpc(
     "user_can_access_counseling",
     {
-      user_email: user.email,
+      user_email: normalizedUserEmail,
     }
   );
 
@@ -41,48 +43,50 @@ export default async function CounselingPage() {
     redirect("/unauthorized");
   }
 
-  let employeesQuery = supabase
-    .from("anc_employees")
-    .select(`
-      id,
-      full_name,
-      title,
-      role_level
-    `)
-    .eq("is_active", true)
-    .order("full_name");
-
-  const { data: isHr } = await supabase.rpc(
-    "is_hr_or_president",
-    {
-      user_email: user.email,
-    }
-  );
-
-  const { data: allEmployees } = await employeesQuery;
+  const { data: isHr } = await supabase.rpc("is_hr_or_president", {
+    user_email: normalizedUserEmail,
+  });
 
   let employees: Employee[] = [];
 
   if (isHr) {
-    employees = (allEmployees || []) as Employee[];
+    const { data } = await supabase
+      .from("anc_employees")
+      .select(`
+        id,
+        full_name,
+        title,
+        role_level
+      `)
+      .eq("is_active", true)
+      .order("full_name");
+
+    employees = (data || []) as Employee[];
   } else {
-    const filteredEmployees: Employee[] = [];
+    // Find the logged-in supervisor's employee record first.
+    // The homescreen should show employees whose supervisor_id points to this record.
+    const { data: currentEmployee } = await supabase
+      .from("anc_employees")
+      .select("id")
+      .eq("email", normalizedUserEmail)
+      .eq("is_active", true)
+      .maybeSingle();
 
-    for (const employee of allEmployees || []) {
-      const { data: allowed } = await supabase.rpc(
-        "user_is_in_employee_chain",
-        {
-          current_user_email: user.email,
-          target_employee_id: employee.id,
-        }
-      );
+    if (currentEmployee?.id) {
+      const { data } = await supabase
+        .from("anc_employees")
+        .select(`
+          id,
+          full_name,
+          title,
+          role_level
+        `)
+        .eq("is_active", true)
+        .eq("supervisor_id", currentEmployee.id)
+        .order("full_name");
 
-      if (allowed) {
-        filteredEmployees.push(employee as Employee);
-      }
+      employees = (data || []) as Employee[];
     }
-
-    employees = filteredEmployees;
   }
 
   const { data: draftsData } = await supabase
@@ -98,10 +102,5 @@ export default async function CounselingPage() {
 
   const drafts = (draftsData || []) as Draft[];
 
-  return (
-    <CounselingDashboardClient
-      employees={employees}
-      drafts={drafts}
-    />
-  );
+  return <CounselingDashboardClient employees={employees} drafts={drafts} />;
 }
