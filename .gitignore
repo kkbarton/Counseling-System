@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+app.zip
+components.zip
+test-smtp.js
+.env.local
