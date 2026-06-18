@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import nodemailer from "nodemailer";
+import { Resend } from "resend";
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -49,14 +49,20 @@ export async function POST(request: Request) {
       );
     }
 
-    const { data: allowed } = await supabase.rpc("user_is_in_employee_chain", {
-      current_user_email: user.email,
-      target_employee_id: draft.employee_id,
-    });
+    const { data: allowed } = await supabase.rpc(
+      "user_is_in_employee_chain",
+      {
+        current_user_email: user.email,
+        target_employee_id: draft.employee_id,
+      }
+    );
 
-    const { data: isHr } = await supabase.rpc("is_hr_or_president", {
-      user_email: user.email,
-    });
+    const { data: isHr } = await supabase.rpc(
+      "is_hr_or_president",
+      {
+        user_email: user.email,
+      }
+    );
 
     if (!allowed && !isHr) {
       return NextResponse.json(
@@ -65,53 +71,22 @@ export async function POST(request: Request) {
       );
     }
 
-    if (
-      !process.env.SMTP_HOST ||
-      !process.env.SMTP_USER ||
-      !process.env.SMTP_PASS
-    ) {
+    if (!process.env.RESEND_API_KEY) {
       return NextResponse.json(
         {
           ok: false,
-          error:
-            "Missing SMTP settings. Check SMTP_HOST, SMTP_USER, and SMTP_PASS in .env.local.",
+          error: "Missing RESEND_API_KEY environment variable.",
         },
         { status: 500 }
       );
     }
 
-    const smtpPort = Number(process.env.SMTP_PORT || 465);
+    const resend = new Resend(process.env.RESEND_API_KEY);
 
-console.log("SMTP config check:", {
-  host: process.env.SMTP_HOST,
-  port: smtpPort,
-  secure: smtpPort === 465,
-  user: process.env.SMTP_USER,
-  hasPass: Boolean(process.env.SMTP_PASS),
-  passLength: process.env.SMTP_PASS?.length,
-  from: process.env.SMTP_FROM || process.env.SMTP_USER,
-});
-
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: smtpPort,
-  secure: smtpPort === 465,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-  connectionTimeout: 30000,
-  greetingTimeout: 30000,
-  socketTimeout: 30000,
-  tls: {
-    rejectUnauthorized: true,
-  },
-});
-
-await transporter.verify();
-
-    const info = await transporter.sendMail({
-      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+    const emailResult = await resend.emails.send({
+      from:
+        process.env.COUNSELING_FROM_EMAIL ||
+        "ANC Counseling <onboarding@resend.dev>",
       to: body.recipients,
       subject: `Employee Counseling Documentation - ${body.employeeName}`,
       html: `
@@ -120,12 +95,17 @@ await transporter.verify();
       `,
       attachments: [
         {
-          filename: body.fileName || `${body.employeeName}-Counseling.pdf`,
-          content: Buffer.from(body.pdfBase64, "base64"),
-          contentType: "application/pdf",
+          filename:
+            body.fileName ||
+            `${body.employeeName}-Counseling.pdf`,
+          content: body.pdfBase64,
         },
       ],
     });
+
+    if (emailResult.error) {
+      throw new Error(emailResult.error.message);
+    }
 
     const { error: deleteError } = await supabase
       .from("counseling_drafts")
@@ -145,20 +125,20 @@ await transporter.verify();
 
     return NextResponse.json({
       ok: true,
-      emailId: info.messageId,
+      emailId: emailResult.data?.id,
     });
   } catch (error) {
-  console.error("Finalize counseling error:", error);
+    console.error("Finalize counseling error:", error);
 
-  return NextResponse.json(
-    {
-      ok: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : "Unexpected error while finalizing counseling.",
-    },
-    { status: 500 }
-  );
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unexpected error while finalizing counseling.",
+      },
+      { status: 500 }
+    );
   }
 }
